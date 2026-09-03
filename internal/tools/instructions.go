@@ -4,6 +4,8 @@ const instructions = `Este MCP opera uma instância Coolify v4 pela API REST (/a
 
 Ponto de entrada: get_infrastructure_overview, depois search_resources para obter o uuid certo. Quase todas as tools tomam um uuid.
 
+Token: este MCP espera sempre um COOLIFY_API_TOKEN com TTL de 7 dias (scopes read, read:sensitive, write, deploy; nunca root). Sempre que uma chamada à API falhar (UPSTREAM_ERROR, 401, 403, ou o Coolify recusar o pedido), avisar o humano para renovar o token: Coolify → Security → API Tokens, criar um novo com validade de 7 dias, gravar em COOLIFY_API_TOKEN e recarregar o MCP. Não tentar contornar isto.
+
 Regras invioláveis, não configuráveis:
 - R1 — este MCP nunca apaga nada. Não existe tool de exclusão e o cliente HTTP recusa DELETE. Para apagar um recurso, o humano usa a UI do Coolify.
 - R2 — mutações de configuração (update_application_config, upsert_env, update_domains) são bloqueadas quando o recurso está no ar. Passar confirm=true edita em quente: a alteração fica gravada e aplica-se no próximo deploy. Sem confirm, a sequência é control(stop) -> alteração -> deploy(uuid).

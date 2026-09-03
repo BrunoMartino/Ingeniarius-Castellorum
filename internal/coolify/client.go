@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 
@@ -31,9 +33,10 @@ type Client struct {
 	audit   *guard.Auditor
 	http    *http.Client
 	cache   *inventoryCache
+	logger  *slog.Logger
 }
 
-func NewClient(baseURL, token, user string, policy *guard.RoutePolicy, audit *guard.Auditor, httpClient *http.Client) *Client {
+func NewClient(baseURL, token, user string, policy *guard.RoutePolicy, audit *guard.Auditor, httpClient *http.Client, logger *slog.Logger) *Client {
 	if policy == nil {
 		policy = guard.NewRoutePolicy()
 	}
@@ -48,6 +51,7 @@ func NewClient(baseURL, token, user string, policy *guard.RoutePolicy, audit *gu
 		audit:   audit,
 		http:    httpClient,
 		cache:   newInventoryCache(),
+		logger:  logger,
 	}
 }
 
@@ -98,7 +102,17 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		full += "?" + query.Encode()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, full, payload)
+	var localAddr, remoteAddr string
+	trace := &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) {
+			if info.Conn == nil {
+				return
+			}
+			localAddr = info.Conn.LocalAddr().String()
+			remoteAddr = info.Conn.RemoteAddr().String()
+		},
+	}
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), method, full, payload)
 	if err != nil {
 		return guard.NewError(guard.CodeBadInput, err.Error())
 	}
@@ -125,8 +139,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return guard.NewError(guard.CodeNotFound, fmt.Sprintf("Coolify returned 404 for %s %s", method, path))
 	}
 	if resp.StatusCode >= 400 {
-		return guard.NewError(guard.CodeUpstream,
-			fmt.Sprintf("Coolify returned %d for %s %s: %s", resp.StatusCode, method, path, snippet(raw)))
+		return c.statusError(method, full, localAddr, remoteAddr, resp, raw)
 	}
 
 	if out == nil || len(bytes.TrimSpace(raw)) == 0 {
@@ -137,6 +150,41 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 			fmt.Sprintf("could not decode Coolify response for %s %s: %s", method, path, err.Error()))
 	}
 	return nil
+}
+
+func (c *Client) statusError(method, fullURL, localAddr, remoteAddr string, resp *http.Response, raw []byte) error {
+	body := snippet(raw)
+	tokenLen, tokenPrefix := tokenFingerprint(c.token)
+	headers := interestingHeaders(resp.Header)
+	c.log(slog.LevelWarn, "coolify upstream error",
+		"method", method,
+		"url", fullURL,
+		"status", resp.StatusCode,
+		"body", body,
+		"token_len", tokenLen,
+		"token_prefix", tokenPrefix,
+		"tcp_local", localAddr,
+		"tcp_remote", remoteAddr,
+		"response_headers", headers,
+	)
+	reason := fmt.Sprintf(
+		"Coolify returned %d for %s %s | auth=Bearer token_len=%d token_prefix=%s | tcp local=%s remote=%s | body=%s",
+		resp.StatusCode, method, fullURL, tokenLen, tokenPrefix, orDash(localAddr), orDash(remoteAddr), body,
+	)
+	if headers != "" {
+		reason += " | headers=" + headers
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return guard.NewErrorWithRemedy(guard.CodeUpstream, reason, diagnoseCoolify(resp.StatusCode, body))
+	}
+	return guard.NewErrorWithRemedy(guard.CodeUpstream, reason, tokenTTLRemedy)
+}
+
+func (c *Client) log(level slog.Level, msg string, args ...any) {
+	if c.logger == nil {
+		return
+	}
+	c.logger.Log(context.Background(), level, msg, args...)
 }
 
 func snippet(raw []byte) string {
@@ -152,6 +200,56 @@ func scrub(s, secret string) string {
 		return s
 	}
 	return strings.ReplaceAll(s, secret, "[redacted]")
+}
+
+// tokenFingerprint is safe to log: length plus the Laravel "id|" prefix, never the secret.
+func tokenFingerprint(token string) (int, string) {
+	n := len(token)
+	if n == 0 {
+		return 0, "empty"
+	}
+	if i := strings.IndexByte(token, '|'); i >= 0 && i <= 6 {
+		return n, token[:i+1] + "…"
+	}
+	return n, "…"
+}
+
+func interestingHeaders(h http.Header) string {
+	keys := []string{"CF-Ray", "CF-Connecting-IP", "Server", "Via", "WWW-Authenticate", "X-Request-Id", "X-Forwarded-For"}
+	var parts []string
+	for _, k := range keys {
+		if v := strings.TrimSpace(h.Get(k)); v != "" {
+			parts = append(parts, k+"="+v)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// tokenTTLRemedy is appended to every Coolify refusal: this MCP only accepts
+// API tokens issued with a 7-day expiry.
+const tokenTTLRemedy = "This MCP expects Coolify API tokens with a 7-day TTL. Ask the human to renew the token: Coolify → Security → API Tokens, create a new one expiring in 7 days (scopes read, read:sensitive, write, deploy; never root), set COOLIFY_API_TOKEN, and reload the MCP."
+
+func diagnoseCoolify(status int, body string) string {
+	lower := strings.ToLower(body)
+	var specific string
+	switch {
+	case strings.Contains(lower, "you are not allowed to access the api"):
+		specific = "Coolify rejected this client IP (ApiAllowed middleware), not the token and not COOLIFY_USER. $request->ip() on the Coolify host is compared to Settings → Advanced → Allowed IPs; behind Cloudflare/proxy that IP is often the proxy, not this machine's public address. Add that IP, or 0.0.0.0 to allow all, then Save."
+	case strings.Contains(lower, "api is disabled"):
+		specific = "Enable API Access in Coolify Settings → Advanced and Save."
+	case status == http.StatusUnauthorized:
+		specific = "Coolify rejected the bearer token. Check COOLIFY_API_TOKEN. COOLIFY_USER is audit-only and is not sent."
+	default:
+		specific = "Coolify refused the request. Confirm COOLIFY_URL points at the instance root (no /mcp), API Access is on, Allowed IPs includes the IP Coolify sees, and COOLIFY_API_TOKEN is valid. COOLIFY_USER is not sent."
+	}
+	return specific + " " + tokenTTLRemedy
+}
+
+func orDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "-"
+	}
+	return s
 }
 
 // IsNotFound reports whether err is a Coolify 404, used when probing which

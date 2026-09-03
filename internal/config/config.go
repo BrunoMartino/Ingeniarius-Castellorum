@@ -99,6 +99,7 @@ func (c *Config) Redacted() map[string]any {
 	return map[string]any{
 		"url":                c.URL,
 		"user":               c.User,
+		"token_len":          len(c.Token),
 		"transport":          c.Transport,
 		"http_addr":          c.HTTPAddr,
 		"strict_onair":       c.StrictOnAir,

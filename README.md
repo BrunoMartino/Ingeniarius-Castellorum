@@ -16,6 +16,7 @@ MCP em Go para uma instância Coolify v4 (`/api/v1`). Binário: `coolify-mcp`.
 
 - Go 1.22+ (só na primeira compilação)
 - Token da API Coolify com `read`, `read:sensitive`, `write` e `deploy` — nunca `root`
+- O token tem de ter TTL de **7 dias**. Se o MCP falhar, gera um token novo no Coolify (Security → API Tokens), actualiza `COOLIFY_API_TOKEN` e recarrega o MCP
 
 ---
 
@@ -32,7 +33,7 @@ Edita `.env` e preenche:
 | Variável | Obrigatório | Função |
 |----------|-------------|--------|
 | `COOLIFY_URL` | sim | URL da instância Coolify |
-| `COOLIFY_API_TOKEN` | sim | Token da API |
+| `COOLIFY_API_TOKEN` | sim | Token da API (TTL 7 dias) |
 | `COOLIFY_USER` | sim | Identidade no audit log |
 | `COOLIFY_MCP_TRANSPORT` | não | `stdio` (default) ou `http` |
 | `COOLIFY_MCP_HTTP_ADDR` | não | Endereço em modo http (ex. `:8788`) |
@@ -106,8 +107,3 @@ Códigos de recusa: `DENIED_DELETE` · `DENIED_ONAIR` · `DENIED_CLI` · `DENIED
 
 ---
 
-## Testes
-
-```bash
-go test ./...
-```

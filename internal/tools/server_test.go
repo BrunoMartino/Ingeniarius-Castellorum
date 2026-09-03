@@ -27,8 +27,8 @@ func newRuntime(t *testing.T) (*Runtime, *guard.Auditor) {
 		AuditPath: t.TempDir() + "/audit.jsonl", Timeout: 5 * time.Second,
 	}
 	audit := guard.NewAuditor(cfg.AuditPath)
-	client := coolify.NewClient(cfg.URL, cfg.Token, cfg.User, guard.NewRoutePolicy(), audit, &http.Client{})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	client := coolify.NewClient(cfg.URL, cfg.Token, cfg.User, guard.NewRoutePolicy(), audit, &http.Client{}, logger)
 	return New(cfg, client, audit, cli.NewRunner(cfg.AllowCLI), logger), audit
 }
 

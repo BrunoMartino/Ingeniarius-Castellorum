@@ -166,7 +166,7 @@ func (r *Runtime) register() {
 
 	mcp.AddTool(r.server, &mcp.Tool{
 		Name:        "coolify_update_application_config",
-		Description: "Patch an application's build pack, build/install/start commands, exposed ports, health check, resource limits or git branch. Refused while the application is on air unless you pass confirm=true, which stores the change for the next deploy without stopping anything.",
+		Description: "Patch an application's build/runtime settings, or a service's docker_compose_raw and urls. Refused while the resource is on air unless you pass confirm=true, which stores the change for the next deploy without stopping anything.",
 		InputSchema: inputSchema[updateAppConfigInput](),
 	}, r.updateApplicationConfig)
 

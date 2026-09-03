@@ -2,6 +2,7 @@ package coolify
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -245,5 +246,44 @@ func assertInstantDeployFalse(t *testing.T, body string) {
 	}
 	if m["instant_deploy"] != false {
 		t.Errorf("instant_deploy = %v, want false; creation must never deploy: %s", m["instant_deploy"], body)
+	}
+}
+
+func TestEncodeComposeBase64(t *testing.T) {
+	yaml := "services:\n  web:\n    image: nginx\n"
+	got := encodeCompose(yaml)
+	decoded, err := base64.StdEncoding.DecodeString(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != yaml {
+		t.Fatalf("roundtrip = %q", decoded)
+	}
+	if encodeCompose(got) != got {
+		t.Fatal("already-encoded compose was encoded twice")
+	}
+}
+
+func TestUpdateApplicationConfigPatchesStoppedServiceCompose(t *testing.T) {
+	f := newMutationFixture(t, "service", "exited")
+	g := guard.NewOnAirGuard(true)
+	_, err := f.client.UpdateApplicationConfig(context.Background(), g, "r1", map[string]any{
+		"docker_compose_raw": "services:\n  glances:\n    image: nicolargo/glances:latest\n",
+		"urls": []map[string]string{
+			{"name": "glances", "url": ""},
+			{"name": "glances-proxy", "url": "https://beholder.example.com"},
+		},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.didMutate() {
+		t.Fatal("expected a PATCH to Coolify")
+	}
+	if !strings.Contains(f.lastBody, `"docker_compose_raw"`) {
+		t.Fatalf("body missing compose: %s", f.lastBody)
+	}
+	if strings.Contains(f.lastBody, "services:\n") {
+		t.Fatalf("compose was sent as raw YAML, Coolify wants base64: %s", f.lastBody)
 	}
 }

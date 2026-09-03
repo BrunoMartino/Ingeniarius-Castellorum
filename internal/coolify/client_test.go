@@ -29,7 +29,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*Client, *guard.Audi
 	t.Cleanup(srv.Close)
 
 	audit := guard.NewAuditor(t.TempDir() + "/audit.jsonl")
-	c := NewClient(srv.URL, "test-token", "tester", guard.NewRoutePolicy(), audit, srv.Client())
+	c := NewClient(srv.URL, "test-token", "tester", guard.NewRoutePolicy(), audit, srv.Client(), nil)
 	return c, audit, &hits
 }
 
@@ -88,6 +88,46 @@ func TestErrorsDoNotLeakTheToken(t *testing.T) {
 	err := c.Get(context.Background(), "/applications/abc", nil, nil)
 	if err == nil || strings.Contains(err.Error(), "test-token") {
 		t.Fatalf("error leaked the token: %v", err)
+	}
+}
+
+func TestForbiddenErrorExplainsAllowlist(t *testing.T) {
+	c, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"success":true,"message":"You are not allowed to access the API."}`))
+	})
+	err := c.Get(context.Background(), "/resources", nil, nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "test-token") {
+		t.Fatalf("error leaked the token: %v", err)
+	}
+	for _, needle := range []string{
+		"/api/v1/resources",
+		"token_len=10",
+		"Allowed IPs",
+		"COOLIFY_USER",
+		"7-day TTL",
+	} {
+		if !strings.Contains(msg, needle) {
+			t.Errorf("error missing %q:\n%s", needle, msg)
+		}
+	}
+	if !guard.IsCode(err, guard.CodeUpstream) {
+		t.Errorf("want UPSTREAM_ERROR, got %v", err)
+	}
+}
+
+func TestTokenFingerprint(t *testing.T) {
+	n, prefix := tokenFingerprint("3|abcdefghij")
+	if n != 12 || prefix != "3|…" {
+		t.Fatalf("got %d %q", n, prefix)
+	}
+	n, prefix = tokenFingerprint("")
+	if n != 0 || prefix != "empty" {
+		t.Fatalf("empty: %d %q", n, prefix)
 	}
 }
 

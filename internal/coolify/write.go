@@ -2,8 +2,10 @@ package coolify
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
+	"unicode"
 
 	"coolify-mcp/internal/guard"
 )
@@ -162,8 +164,8 @@ func (c *Client) mutateConfig(ctx context.Context, onAir *guard.OnAirGuard, uuid
 	return m, nil
 }
 
-// UpdateApplicationConfig patches build, runtime and health-check settings of
-// an application. Blocked on air unless confirm=true (R2).
+// UpdateApplicationConfig patches an application, or a service's compose/urls.
+// Blocked on air unless confirm=true (R2).
 func (c *Client) UpdateApplicationConfig(ctx context.Context, onAir *guard.OnAirGuard, uuid string, fields map[string]any, confirm bool) (*Mutation, error) {
 	if len(fields) == 0 {
 		return nil, guard.NewError(guard.CodeBadInput, "at least one settings field is required")
@@ -173,15 +175,84 @@ func (c *Client) UpdateApplicationConfig(ctx context.Context, onAir *guard.OnAir
 	delete(fields, "instant_deploy")
 
 	return c.mutateConfig(ctx, onAir, uuid, confirm, func(res Resource) (json.RawMessage, error) {
-		if res.Kind != KindApplication {
-			return nil, guard.NewErrorWithRemedy(guard.CodeBadInput,
-				"update_application_config only applies to applications; "+uuid+" is a "+string(res.Kind),
-				"use upsert_env for database and service settings, or change them in the Coolify UI")
-		}
 		var out json.RawMessage
-		err := c.Patch(ctx, "/applications/"+uuid, fields, &out)
-		return out, err
+		switch res.Kind {
+		case KindApplication:
+			err := c.Patch(ctx, "/applications/"+uuid, fields, &out)
+			return out, err
+		case KindService:
+			body, err := servicePatchBody(fields)
+			if err != nil {
+				return nil, err
+			}
+			err = c.Patch(ctx, "/services/"+uuid, body, &out)
+			return out, err
+		default:
+			return nil, guard.NewErrorWithRemedy(guard.CodeBadInput,
+				"update_application_config does not apply to databases; "+uuid+" is a "+string(res.Kind),
+				"use upsert_env for database settings, or change them in the Coolify UI")
+		}
 	})
+}
+
+func servicePatchBody(fields map[string]any) (map[string]any, error) {
+	allowed := map[string]bool{
+		"docker_compose_raw":                true,
+		"urls":                              true,
+		"name":                              true,
+		"description":                       true,
+		"connect_to_docker_network":         true,
+		"force_domain_override":             true,
+		"is_container_label_escape_enabled": true,
+	}
+	body := map[string]any{}
+	for k, v := range fields {
+		if !allowed[k] {
+			return nil, guard.NewError(guard.CodeBadInput,
+				"service patch does not accept "+k+"; allowed: docker_compose_raw, urls, name, description")
+		}
+		body[k] = v
+	}
+	if raw, ok := body["docker_compose_raw"].(string); ok && strings.TrimSpace(raw) != "" {
+		body["docker_compose_raw"] = encodeCompose(raw)
+	}
+	if len(body) == 0 {
+		return nil, guard.NewError(guard.CodeBadInput, "at least one service settings field is required")
+	}
+	return body, nil
+}
+
+func encodeCompose(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return s
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(s); err == nil {
+		trimmed := strings.TrimSpace(string(decoded))
+		if strings.HasPrefix(trimmed, "services:") || strings.Contains(trimmed, "\nservices:") {
+			return s
+		}
+	}
+	// Reject leftovers that look like base64 but aren't compose — Coolify
+	// requires the field to be base64 of the YAML.
+	if isProbablyBase64(s) && !strings.Contains(s, "services:") {
+		return s
+	}
+	return base64.StdEncoding.EncodeToString([]byte(raw))
+}
+
+func isProbablyBase64(s string) bool {
+	if len(s) < 8 || len(s)%4 != 0 {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '+' || r == '/' || r == '=' {
+			continue
+		}
+		return false
+	}
+	_, err := base64.StdEncoding.DecodeString(s)
+	return err == nil
 }
 
 // EnvInput is one variable to create or update.

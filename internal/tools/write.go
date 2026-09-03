@@ -46,7 +46,7 @@ type createServiceInput struct {
 
 type updateAppConfigInput struct {
 	UUID    string         `json:"uuid" jsonschema:"application uuid"`
-	Fields  map[string]any `json:"fields" jsonschema:"settings to patch: build_pack, build_command, install_command, start_command, ports_exposes, health_check_*, limits_*, git_branch and so on"`
+	Fields  map[string]any `json:"fields" jsonschema:"settings to patch. Applications: build_pack, build_command, ports_exposes, health_check_*, git_branch. Services: docker_compose_raw (YAML), urls ([{name,url}] per compose service)."`
 	Confirm bool           `json:"confirm,omitempty" jsonschema:"edit in place while the application is on air; without it an active application is refused"`
 }
 
