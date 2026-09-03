@@ -109,15 +109,6 @@ Códigos de recusa: `DENIED_DELETE` · `DENIED_ONAIR` · `DENIED_CLI` · `DENIED
 
 ---
 
-
-## Deploy não é síncrono
-
-`deploy`, `control(start|restart)` e `repair_resource` devolvem quando o Coolify **aceita** o pedido, não quando o recurso está de pé — o resultado traz `deployed: false` e um aviso em `next`.
-
-Durante o `start_period` de um healthcheck, o Docker reporta o container como saudável independentemente do que a sonda diria. Por isso, nos 3 minutos seguintes a um deploy, todas as leituras de estado (`get_resource`, `search_resources`, overview) devolvem `status_provisional: true`. **Não reportar sucesso enquanto esse campo existir**; esperar e voltar a ler.
-
-Cuidado especial com healthchecks: uma sonda que falha faz o Traefik retirar o container do balanceador e o site passa a devolver `no available server` com o processo vivo lá dentro. Validar que o compose é YAML válido **não** prova que a sonda funciona — confirmar o comando dentro do container antes de gravar.
-
 ## Logs de services
 
 Um service não tem logs próprios: o Coolify 404a `/services/{uuid}/logs` e serve-os por container. O `get_logs` faz fan-out por todos os containers do service e devolve sempre uma lista `containers`; o parâmetro opcional `container` filtra por nome ou uuid. Um container ilegível não afunda a chamada — fica com `error` e os restantes devolvem logs.
