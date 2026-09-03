@@ -101,6 +101,9 @@ func allowedRoutes() []routeRule {
 		r(`/services/`+uuidPat+`/(start|stop|restart)`, "POST"),
 		r(`/services/`+uuidPat+`/applications`, "GET"),
 		r(`/services/`+uuidPat+`/databases`, "GET"),
+		// A service has no logs of its own: Coolify serves them per container.
+		r(`/services/`+uuidPat+`/applications/`+uuidPat+`/logs`, "GET"),
+		r(`/services/`+uuidPat+`/databases/`+uuidPat+`/logs`, "GET"),
 
 		// --- deployments ---
 		r(`/deploy`, "POST"),

@@ -85,7 +85,7 @@ func (r *Runtime) register() {
 
 	mcp.AddTool(r.server, &mcp.Tool{
 		Name:        "coolify_get_logs",
-		Description: "Runtime logs of an application, database or service. Defaults to the last 200 lines.",
+		Description: "Runtime logs of an application, database or service. Defaults to the last 200 lines. A service has no logs of its own, so this returns one entry per container in it; pass container to narrow it to one by name or uuid. Always returns a containers list, even for a single-container resource.",
 		InputSchema: inputSchema[logsInput](),
 	}, r.getLogs)
 
@@ -123,13 +123,13 @@ func (r *Runtime) register() {
 	// --- deploy ---
 	mcp.AddTool(r.server, &mcp.Tool{
 		Name:        "coolify_control",
-		Description: "Start, stop or restart an application, database or service. The only place start/stop/restart exists. Allowed on a running resource: this is a lifecycle operation, not a configuration change.",
+		Description: "Start, stop or restart an application, database or service. The only place start/stop/restart exists. Allowed on a running resource: this is a lifecycle operation, not a configuration change. start and restart return before the containers are actually up.",
 		InputSchema: inputSchema[controlInput](),
 	}, r.control)
 
 	mcp.AddTool(r.server, &mcp.Tool{
 		Name:        "coolify_deploy",
-		Description: "Trigger a deployment. Deploys the branch already configured on the application; to deploy a different branch, set git_branch with coolify_update_application_config first. docker_tag applies to docker-image applications only.",
+		Description: "Trigger a deployment. Returns once Coolify ACCEPTS the request, not once the resource is up: the result carries deployed:false and the containers are still starting. Deploys the branch already configured on the application; to deploy a different branch, set git_branch with coolify_update_application_config first. docker_tag applies to docker-image applications only.",
 		InputSchema: inputSchema[deployInput](),
 	}, r.deploy)
 
@@ -166,25 +166,25 @@ func (r *Runtime) register() {
 
 	mcp.AddTool(r.server, &mcp.Tool{
 		Name:        "coolify_update_application_config",
-		Description: "Patch an application's build/runtime settings, or a service's docker_compose_raw and urls. Refused while the resource is on air unless you pass confirm=true, which stores the change for the next deploy without stopping anything.",
+		Description: "Patch an application's build/runtime settings, or a service's docker_compose_raw and urls. REFUSED while the resource is running, with no override: you cannot change or repair the definition of something that is up. Report the refusal to the human and ask them to stop it; do not stop it yourself. Then: the update, then coolify_deploy.",
 		InputSchema: inputSchema[updateAppConfigInput](),
 	}, r.updateApplicationConfig)
 
 	mcp.AddTool(r.server, &mcp.Tool{
 		Name:        "coolify_upsert_env",
-		Description: "Create or update environment variables in one batch. Never removes a variable: removal is done by hand in the Coolify UI. Refused while the resource is on air unless you pass confirm=true; the change then applies on the next deploy or restart.",
+		Description: "Create or update environment variables in one batch. Never removes a variable: removal is done by hand in the Coolify UI. REFUSED while the resource is running, with no override. Report the refusal to the human and ask them to stop it; do not stop it yourself. Then: the update, then coolify_deploy.",
 		InputSchema: inputSchema[upsertEnvInput](),
 	}, r.upsertEnv)
 
 	mcp.AddTool(r.server, &mcp.Tool{
 		Name:        "coolify_update_domains",
-		Description: "Set the full FQDN list of an application or service, replacing the current one. Refused while the resource is on air unless you pass confirm=true. Managed databases are not reachable by domain.",
+		Description: "Set the full FQDN list of an application or service, replacing the current one. REFUSED while the resource is running, with no override. Report the refusal to the human and ask them to stop it; do not stop it yourself. Managed databases are not reachable by domain.",
 		InputSchema: inputSchema[updateDomainsInput](),
 	}, r.updateDomains)
 
 	mcp.AddTool(r.server, &mcp.Tool{
 		Name:        "coolify_repair_resource",
-		Description: "Recreate a resource's container from its current configuration, image and commit. Does not touch volumes, files or the database. Requires the resource to be STOPPED — confirm=true does not override that; run coolify_control(stop) first.",
+		Description: "Recreate a resource's container from its current configuration, image and commit. Does not touch volumes, files or the database. Requires the resource to be STOPPED. Report the refusal to the human and ask them to stop it; do not stop it yourself.",
 		InputSchema: inputSchema[uuidInput](),
 	}, r.repairResource)
 

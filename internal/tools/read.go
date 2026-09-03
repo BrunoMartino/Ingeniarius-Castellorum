@@ -38,8 +38,9 @@ type listDeploymentsInput struct {
 }
 
 type logsInput struct {
-	UUID  string `json:"uuid" jsonschema:"uuid of the application, database or service"`
-	Lines int    `json:"lines,omitempty" jsonschema:"how many trailing lines to return, default 200"`
+	UUID      string `json:"uuid" jsonschema:"uuid of the application, database or service"`
+	Lines     int    `json:"lines,omitempty" jsonschema:"how many trailing lines to return, default 200"`
+	Container string `json:"container,omitempty" jsonschema:"services only: one container by name or uuid; omit to get every container in the service"`
 }
 
 type scheduledTasksInput struct {
@@ -178,12 +179,16 @@ func (r *Runtime) getLogs(ctx context.Context, _ *mcp.CallToolRequest, in logsIn
 	if lines <= 0 {
 		lines = 200
 	}
-	raw, err := r.client.Logs(ctx, in.UUID, lines)
+	containers, err := r.client.Logs(ctx, in.UUID, lines, in.Container)
 	r.record(false, "get_logs", in.UUID, err)
 	if err != nil {
 		return fail(err)
 	}
-	return ok(map[string]any{"uuid": in.UUID, "lines": lines, "logs": raw})
+	return ok(map[string]any{
+		"uuid":       in.UUID,
+		"lines":      lines,
+		"containers": containers,
+	})
 }
 
 func (r *Runtime) listEnvKeys(ctx context.Context, _ *mcp.CallToolRequest, in uuidInput) (*mcp.CallToolResult, any, error) {

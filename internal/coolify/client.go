@@ -33,6 +33,7 @@ type Client struct {
 	audit   *guard.Auditor
 	http    *http.Client
 	cache   *inventoryCache
+	deploys *deployTracker
 	logger  *slog.Logger
 }
 
@@ -51,6 +52,7 @@ func NewClient(baseURL, token, user string, policy *guard.RoutePolicy, audit *gu
 		audit:   audit,
 		http:    httpClient,
 		cache:   newInventoryCache(),
+		deploys: newDeployTracker(),
 		logger:  logger,
 	}
 }

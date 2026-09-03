@@ -36,6 +36,9 @@ func (c *Client) Control(ctx context.Context, uuid, action string) (json.RawMess
 	if err != nil {
 		return nil, err
 	}
+	if action != ActionStop {
+		c.deploys.mark(uuid)
+	}
 	return out, nil
 }
 
@@ -66,6 +69,8 @@ func (c *Client) Deploy(ctx context.Context, uuid string, opts DeployOptions) (j
 		return nil, err
 	}
 	c.cache.invalidate()
+	// The resource's status is not trustworthy again until it settles.
+	c.deploys.mark(uuid)
 	return out, nil
 }
 
@@ -109,3 +114,9 @@ func quoteEmpty(s string) string {
 	}
 	return s
 }
+
+// PostDeployWarning is returned by every operation that (re)starts containers.
+// It exists because a deployment that returns 200 has only been *accepted*:
+// the containers are still coming up, and a status read during a healthcheck's
+// start_period reports healthy no matter what the healthcheck would say.
+const PostDeployWarning = "Coolify accepted the request; the containers are not up yet. Do NOT report success from a status read taken now. Wait out the healthcheck start_period, then re-read the status and treat it as real only once status_provisional is absent. If you changed a healthcheck, verify the probe command actually works inside the container before trusting a healthy status."

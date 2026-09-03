@@ -123,19 +123,16 @@ func (c *Client) CreateService(ctx context.Context, fields map[string]any) (json
 
 // Mutation is the outcome of a guarded configuration change.
 type Mutation struct {
-	UUID      string          `json:"uuid"`
-	Kind      Kind            `json:"kind"`
-	Status    string          `json:"status"`
-	HotEdited bool            `json:"hot_edited"`
-	Note      string          `json:"note,omitempty"`
-	Result    json.RawMessage `json:"result,omitempty"`
+	UUID   string          `json:"uuid"`
+	Kind   Kind            `json:"kind"`
+	Status string          `json:"status"`
+	Note   string          `json:"note,omitempty"`
+	Result json.RawMessage `json:"result,omitempty"`
 }
-
-const hotEditNote = "the resource was on air and confirm=true was passed: the change is stored now and takes effect on the next deploy or restart"
 
 // mutateConfig is the single R2 checkpoint. Every configuration change routes
 // through here: resolve the live status, ask the on-air guard, then write.
-func (c *Client) mutateConfig(ctx context.Context, onAir *guard.OnAirGuard, uuid string, confirm bool, apply func(Resource) (json.RawMessage, error)) (*Mutation, error) {
+func (c *Client) mutateConfig(ctx context.Context, onAir *guard.OnAirGuard, uuid string, apply func(Resource) (json.RawMessage, error)) (*Mutation, error) {
 	res, err := c.Resolve(ctx, uuid)
 	if err != nil {
 		return nil, err
@@ -148,7 +145,7 @@ func (c *Client) mutateConfig(ctx context.Context, onAir *guard.OnAirGuard, uuid
 			res.State = fresh.State
 		}
 	}
-	if err := onAir.AssertMutable(uuid, res.Status, confirm); err != nil {
+	if err := onAir.AssertMutable(uuid, res.Status); err != nil {
 		return nil, err
 	}
 	out, err := apply(res)
@@ -156,17 +153,12 @@ func (c *Client) mutateConfig(ctx context.Context, onAir *guard.OnAirGuard, uuid
 		return nil, err
 	}
 	c.cache.invalidate()
-	m := &Mutation{UUID: uuid, Kind: res.Kind, Status: res.Status, Result: out}
-	if guard.Classify(res.Status) != guard.StateInactive {
-		m.HotEdited = true
-		m.Note = hotEditNote
-	}
-	return m, nil
+	return &Mutation{UUID: uuid, Kind: res.Kind, Status: res.Status, Result: out}, nil
 }
 
 // UpdateApplicationConfig patches an application, or a service's compose/urls.
-// Blocked on air unless confirm=true (R2).
-func (c *Client) UpdateApplicationConfig(ctx context.Context, onAir *guard.OnAirGuard, uuid string, fields map[string]any, confirm bool) (*Mutation, error) {
+// Refused outright while the resource is running (R2).
+func (c *Client) UpdateApplicationConfig(ctx context.Context, onAir *guard.OnAirGuard, uuid string, fields map[string]any) (*Mutation, error) {
 	if len(fields) == 0 {
 		return nil, guard.NewError(guard.CodeBadInput, "at least one settings field is required")
 	}
@@ -174,7 +166,7 @@ func (c *Client) UpdateApplicationConfig(ctx context.Context, onAir *guard.OnAir
 	// agent's back; deploying stays an explicit tool call.
 	delete(fields, "instant_deploy")
 
-	return c.mutateConfig(ctx, onAir, uuid, confirm, func(res Resource) (json.RawMessage, error) {
+	return c.mutateConfig(ctx, onAir, uuid, func(res Resource) (json.RawMessage, error) {
 		var out json.RawMessage
 		switch res.Kind {
 		case KindApplication:
@@ -266,9 +258,9 @@ type EnvInput struct {
 }
 
 // UpsertEnv creates or updates environment variables in one batch. It never
-// removes a variable: deletion is the UI's job (R1). Blocked on air unless
-// confirm=true (R2).
-func (c *Client) UpsertEnv(ctx context.Context, onAir *guard.OnAirGuard, uuid string, vars []EnvInput, confirm bool) (*Mutation, error) {
+// removes a variable: deletion is the UI's job (R1). Refused outright while the
+// resource is running (R2).
+func (c *Client) UpsertEnv(ctx context.Context, onAir *guard.OnAirGuard, uuid string, vars []EnvInput) (*Mutation, error) {
 	if len(vars) == 0 {
 		return nil, guard.NewError(guard.CodeBadInput, "at least one variable is required")
 	}
@@ -292,7 +284,7 @@ func (c *Client) UpsertEnv(ctx context.Context, onAir *guard.OnAirGuard, uuid st
 		}
 		data = append(data, entry)
 	}
-	return c.mutateConfig(ctx, onAir, uuid, confirm, func(res Resource) (json.RawMessage, error) {
+	return c.mutateConfig(ctx, onAir, uuid, func(res Resource) (json.RawMessage, error) {
 		var out json.RawMessage
 		err := c.Patch(ctx, res.Kind.segment()+"/"+uuid+"/envs/bulk", map[string]any{"data": data}, &out)
 		return out, err
@@ -300,9 +292,9 @@ func (c *Client) UpsertEnv(ctx context.Context, onAir *guard.OnAirGuard, uuid st
 }
 
 // UpdateDomains sets the FQDNs of a resource. Applications take a comma
-// separated `domains` field; services take `urls`. Blocked on air unless
-// confirm=true (R2).
-func (c *Client) UpdateDomains(ctx context.Context, onAir *guard.OnAirGuard, uuid string, domains []string, confirm bool) (*Mutation, error) {
+// separated `domains` field; services take `urls`. Refused outright while the
+// resource is running (R2).
+func (c *Client) UpdateDomains(ctx context.Context, onAir *guard.OnAirGuard, uuid string, domains []string) (*Mutation, error) {
 	cleaned := make([]string, 0, len(domains))
 	for _, d := range domains {
 		if d = strings.TrimSpace(d); d != "" {
@@ -313,7 +305,7 @@ func (c *Client) UpdateDomains(ctx context.Context, onAir *guard.OnAirGuard, uui
 		return nil, guard.NewError(guard.CodeBadInput,
 			"at least one domain is required; this tool sets the full domain list and cannot be used to clear it")
 	}
-	return c.mutateConfig(ctx, onAir, uuid, confirm, func(res Resource) (json.RawMessage, error) {
+	return c.mutateConfig(ctx, onAir, uuid, func(res Resource) (json.RawMessage, error) {
 		var out json.RawMessage
 		switch res.Kind {
 		case KindApplication:
@@ -331,8 +323,8 @@ func (c *Client) UpdateDomains(ctx context.Context, onAir *guard.OnAirGuard, uui
 
 // RepairResource recreates a resource's container from its current image or
 // commit, without touching volumes or files. It recreates a container, so it
-// requires the resource to be provably stopped — confirm=true does not override
-// that.
+// requires the resource to be provably stopped, and rejects an unknown status
+// even outside strict mode.
 func (c *Client) RepairResource(ctx context.Context, onAir *guard.OnAirGuard, uuid string) (*Mutation, error) {
 	res, err := c.Resolve(ctx, uuid)
 	if err != nil {
@@ -358,6 +350,7 @@ func (c *Client) RepairResource(ctx context.Context, onAir *guard.OnAirGuard, uu
 		return nil, err
 	}
 	c.cache.invalidate()
+	c.deploys.mark(uuid)
 	return &Mutation{
 		UUID:   uuid,
 		Kind:   res.Kind,

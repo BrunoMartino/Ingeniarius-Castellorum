@@ -56,3 +56,42 @@ A secção 4 do contexto enumera 30 tools, mas a decisão **A3** fixa o teto em 
 - **Cache de inventário de 15 s, só em memória (A6)**, invalidado a cada mutação. R2 nunca decide sobre um status em cache: `mutateConfig` relê o estado ao vivo antes de aplicar o guard.
 - **`update_domains` não aceita lista vazia** — limpar domínios é destrutivo e fica para a UI.
 - **`COOLIFY_MCP_ALLOW_PRIVATE_KEYS`** é lido e validado mas nenhuma tool o consome: chaves privadas continuam fora do catálogo, como o contexto pede. A flag existe para o dia em que isso mude.
+
+---
+
+## 5. Correcções pós-incidente (2026-09-03)
+
+Origem: ao pôr um healthcheck no `beholder-contabo` (service Glances), a sonda falhou, o Traefik retirou o único backend do balanceador e o site passou a devolver `no available server`. Duas falhas do MCP ficaram expostas.
+
+### 5.1 `get_logs` dava 404 em services
+
+O Coolify **não** serve `/services/{uuid}/logs` — 404. Os logs existem por container, em `/services/{uuid}/applications/{app_uuid}/logs` e `/services/{uuid}/databases/{db_uuid}/logs`. O `get_logs` chamava a rota morta e devolvia o 404 ao agente, precisamente no momento em que os logs eram necessários para diagnosticar.
+
+Agora, para um service, o `get_logs` lê a lista de membros e faz fan-out por todos os containers. Um parâmetro opcional `container` filtra por nome ou uuid. O resultado é sempre uma lista `containers`, mesmo para recursos de um só container, para a forma não mudar conforme o tipo. Um container ilegível não afunda a chamada: fica com `error` preenchido e os restantes devolvem logs — o que falha é normalmente o que interessa ler.
+
+Rotas acrescentadas ao allowlist: as duas acima, **só GET** (o OpenAPI também expõe POST em applications/logs; não foi concedido).
+
+### 5.2 Estado lido logo após um deploy não valia nada
+
+`deploy`, `control(start|restart)` e `repair_resource` devolvem quando o Coolify **aceita** o pedido, não quando o recurso está de pé. Pior: durante o `start_period` de um healthcheck, o Docker reporta o container como saudável independentemente do que a sonda diria. Ler o status nessa janela e chamar-lhe sucesso é um falso positivo garantido — foi exactamente o que aconteceu.
+
+Duas medidas:
+
+- **`deployTracker`** — o client regista em memória (A6) quando cada uuid foi deployed/started. Durante `settleWindow` (3 min), qualquer leitura de estado — `Resolve`, `Detail`, `Search`, `Inventory`, e portanto `get_resource`, `search_resources` e o overview — devolve `status_provisional: true` e uma nota a dizer para não reportar sucesso. A anotação é recalculada a cada leitura e nunca entra na cache de inventário, porque depende do tempo.
+- **`PostDeployWarning`** — devolvido no campo `next` por `deploy` e por `control(start|restart)`, junto com `deployed: false`. `control(stop)` não o devolve: parar não reinicia healthchecks.
+
+As instruções do servidor passaram a dizer as duas coisas explicitamente, incluindo que **validar que o compose é YAML válido não prova que a sonda funciona** — a confusão entre as duas foi a causa-raiz do incidente.
+
+Nada disto muda o catálogo: continuam 25 tools, `get_logs` só ganhou um parâmetro opcional.
+
+### 5.3 R2 passa a bloqueio duro: o `confirm` foi removido
+
+A decisão 8.1 (hot-edit com `confirm: true`) foi **revertida**. Foi precisamente esse escape que permitiu gravar um healthcheck partido num service que estava a servir tráfego.
+
+Agora, se um recurso estiver a correr, `update_application_config`, `upsert_env`, `update_domains` e `repair_resource` são recusados com `DENIED_ONAIR` e **não existe forma de contornar**. O parâmetro `confirm` desapareceu das assinaturas do client, dos inputs das tools e dos schemas — não é ignorado em silêncio, deixou de existir.
+
+O que a recusa diz mudou também: em vez de sugerir `control(stop)` à IA, manda-a devolver o problema ao humano e **pedir-lhe** que faça o stop. Derrubar um serviço é decisão do humano, não de um agente a meio de uma tarefa. As instruções do servidor e as descrições das quatro tools dizem isto explicitamente.
+
+`COOLIFY_MCP_STRICT_ONAIR` continua a governar apenas o caso `unknown`. Ciclo de vida (`control`, `deploy`, `cancel_deployment`) continua isento de R2.
+
+Testes: a tabela de estados exige agora recusa em todos os estados activos e em ambos os modos strict; `TestNothingAdvertisesConfirm` garante que nenhuma mensagem de recusa volta a mencionar o escape; e no limite do MCP, `TestNoToolOffersAConfirmEscapeHatch` inspecciona o schema tal como o modelo o vê.

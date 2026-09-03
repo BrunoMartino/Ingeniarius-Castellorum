@@ -99,7 +99,9 @@ Ponto de entrada: `get_infrastructure_overview`. Depois `search_resources` ou `l
 
 Recursos criados nascem **parados**. Deploy é sempre um passo à parte (`deploy`).
 
-Mutação de config num recurso a correr é recusada (`DENIED_ONAIR`), excepto com `confirm=true` (aplica no próximo deploy). Alternativa: `control(stop)` → alterar → `deploy`. `repair_resource` exige o recurso parado; `confirm` não contorna.
+**Se o recurso estiver a correr, não se altera nem se corrige nada nele.** `update_application_config`, `upsert_env`, `update_domains` e `repair_resource` são recusados com `DENIED_ONAIR` e não há forma de contornar — não existe `confirm`.
+
+Nesse caso a IA deve reportar a recusa e **pedir ao humano que faça o stop**, não fazê-lo por iniciativa própria. Depois de parado: alterar → `deploy`.
 
 Não há tools de delete.
 
@@ -107,3 +109,15 @@ Códigos de recusa: `DENIED_DELETE` · `DENIED_ONAIR` · `DENIED_CLI` · `DENIED
 
 ---
 
+
+## Deploy não é síncrono
+
+`deploy`, `control(start|restart)` e `repair_resource` devolvem quando o Coolify **aceita** o pedido, não quando o recurso está de pé — o resultado traz `deployed: false` e um aviso em `next`.
+
+Durante o `start_period` de um healthcheck, o Docker reporta o container como saudável independentemente do que a sonda diria. Por isso, nos 3 minutos seguintes a um deploy, todas as leituras de estado (`get_resource`, `search_resources`, overview) devolvem `status_provisional: true`. **Não reportar sucesso enquanto esse campo existir**; esperar e voltar a ler.
+
+Cuidado especial com healthchecks: uma sonda que falha faz o Traefik retirar o container do balanceador e o site passa a devolver `no available server` com o processo vivo lá dentro. Validar que o compose é YAML válido **não** prova que a sonda funciona — confirmar o comando dentro do container antes de gravar.
+
+## Logs de services
+
+Um service não tem logs próprios: o Coolify 404a `/services/{uuid}/logs` e serve-os por container. O `get_logs` faz fan-out por todos os containers do service e devolve sempre uma lista `containers`; o parâmetro opcional `container` filtra por nome ou uuid. Um container ilegível não afunda a chamada — fica com `error` e os restantes devolvem logs.

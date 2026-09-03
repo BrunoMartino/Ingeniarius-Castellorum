@@ -101,6 +101,8 @@ func TestAllowlistedRoutes(t *testing.T) {
 		{http.MethodPatch, "/services/abc"},
 		{http.MethodPost, "/deploy"},
 		{http.MethodGet, "/deployments"},
+		{http.MethodGet, "/services/abc/applications/def/logs"},
+		{http.MethodGet, "/services/abc/databases/def/logs"},
 		{http.MethodPost, "/deployments/abc/cancel"},
 	}
 	for _, c := range allowed {
@@ -120,6 +122,8 @@ func TestMethodIsScopedPerRoute(t *testing.T) {
 		{http.MethodPatch, "/projects/abc"},      // out of scope in v1
 		{http.MethodGet, "/applications/public"}, // creation endpoint, POST only
 		{http.MethodPut, "/applications/abc"},
+		{http.MethodPost, "/services/abc/applications/def/logs"},
+		{http.MethodPatch, "/services/abc/applications/def/logs"},
 	}
 	for _, c := range cases {
 		if err := p.AssertRequest(c.method, c.path); !IsCode(err, CodeDeniedScope) {

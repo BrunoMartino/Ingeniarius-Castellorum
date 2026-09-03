@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -166,3 +167,60 @@ func TestCLIRefusalIsNotAuditedAsSuccess(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// The confirm escape hatch is gone for good. This asserts it at the boundary
+// the model actually sees: no tool may offer it, and no description may hint
+// that editing a running resource is possible.
+func TestNoToolOffersAConfirmEscapeHatch(t *testing.T) {
+	r, _ := newRuntime(t)
+	res, err := connect(t, r).ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range res.Tools {
+		// The client sees the schema as raw JSON, so check the wire form.
+		schema, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(strings.ToLower(string(schema)), "confirm") {
+			t.Errorf("%s still exposes a confirm parameter: %s", tool.Name, schema)
+		}
+		if strings.Contains(strings.ToLower(tool.Description), "confirm=true") {
+			t.Errorf("%s still advertises confirm=true: %s", tool.Name, tool.Description)
+		}
+	}
+}
+
+// The three config mutations must announce the hard refusal, so the model knows
+// before it tries.
+func TestConfigMutationsAnnounceTheHardRefusal(t *testing.T) {
+	r, _ := newRuntime(t)
+	res, err := connect(t, r).ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gated := map[string]bool{
+		"coolify_update_application_config": true,
+		"coolify_upsert_env":                true,
+		"coolify_update_domains":            true,
+		"coolify_repair_resource":           true,
+	}
+	seen := 0
+	for _, tool := range res.Tools {
+		if !gated[tool.Name] {
+			continue
+		}
+		seen++
+		d := tool.Description
+		if !strings.Contains(d, "do not stop it yourself") {
+			t.Errorf("%s must tell the agent not to stop the resource itself: %s", tool.Name, d)
+		}
+		if !strings.Contains(strings.ToUpper(d), "REFUSED") && !strings.Contains(strings.ToUpper(d), "STOPPED") {
+			t.Errorf("%s must state the refusal up front: %s", tool.Name, d)
+		}
+	}
+	if seen != len(gated) {
+		t.Fatalf("checked %d gated tools, expected %d", seen, len(gated))
+	}
+}

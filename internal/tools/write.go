@@ -45,21 +45,18 @@ type createServiceInput struct {
 }
 
 type updateAppConfigInput struct {
-	UUID    string         `json:"uuid" jsonschema:"application uuid"`
-	Fields  map[string]any `json:"fields" jsonschema:"settings to patch. Applications: build_pack, build_command, ports_exposes, health_check_*, git_branch. Services: docker_compose_raw (YAML), urls ([{name,url}] per compose service)."`
-	Confirm bool           `json:"confirm,omitempty" jsonschema:"edit in place while the application is on air; without it an active application is refused"`
+	UUID   string         `json:"uuid" jsonschema:"application uuid"`
+	Fields map[string]any `json:"fields" jsonschema:"settings to patch. Applications: build_pack, build_command, ports_exposes, health_check_*, git_branch. Services: docker_compose_raw (YAML), urls ([{name,url}] per compose service)."`
 }
 
 type upsertEnvInput struct {
 	UUID      string             `json:"uuid" jsonschema:"uuid of the application, database or service"`
 	Variables []coolify.EnvInput `json:"variables" jsonschema:"variables to create or update; existing keys are overwritten and nothing is ever removed"`
-	Confirm   bool               `json:"confirm,omitempty" jsonschema:"edit in place while the resource is on air; without it an active resource is refused"`
 }
 
 type updateDomainsInput struct {
 	UUID    string   `json:"uuid" jsonschema:"application or service uuid"`
 	Domains []string `json:"domains" jsonschema:"the full FQDN list for the resource; this replaces the current list"`
-	Confirm bool     `json:"confirm,omitempty" jsonschema:"edit in place while the resource is on air; without it an active resource is refused"`
 }
 
 // placement copies the four fields every creation endpoint requires into the
@@ -142,7 +139,7 @@ func (r *Runtime) createService(ctx context.Context, _ *mcp.CallToolRequest, in 
 const createdStoppedNote = "the resource was created stopped; call deploy(uuid) when you are ready to bring it up"
 
 func (r *Runtime) updateApplicationConfig(ctx context.Context, _ *mcp.CallToolRequest, in updateAppConfigInput) (*mcp.CallToolResult, any, error) {
-	m, err := r.client.UpdateApplicationConfig(ctx, r.onAir, in.UUID, in.Fields, in.Confirm)
+	m, err := r.client.UpdateApplicationConfig(ctx, r.onAir, in.UUID, in.Fields)
 	r.record(true, "update_application_config", in.UUID, err)
 	if err != nil {
 		return fail(err)
@@ -151,7 +148,7 @@ func (r *Runtime) updateApplicationConfig(ctx context.Context, _ *mcp.CallToolRe
 }
 
 func (r *Runtime) upsertEnv(ctx context.Context, _ *mcp.CallToolRequest, in upsertEnvInput) (*mcp.CallToolResult, any, error) {
-	m, err := r.client.UpsertEnv(ctx, r.onAir, in.UUID, in.Variables, in.Confirm)
+	m, err := r.client.UpsertEnv(ctx, r.onAir, in.UUID, in.Variables)
 	r.record(true, "upsert_env", in.UUID, err)
 	if err != nil {
 		return fail(err)
@@ -165,7 +162,7 @@ func (r *Runtime) upsertEnv(ctx context.Context, _ *mcp.CallToolRequest, in upse
 }
 
 func (r *Runtime) updateDomains(ctx context.Context, _ *mcp.CallToolRequest, in updateDomainsInput) (*mcp.CallToolResult, any, error) {
-	m, err := r.client.UpdateDomains(ctx, r.onAir, in.UUID, in.Domains, in.Confirm)
+	m, err := r.client.UpdateDomains(ctx, r.onAir, in.UUID, in.Domains)
 	r.record(true, "update_domains", in.UUID, err)
 	if err != nil {
 		return fail(err)

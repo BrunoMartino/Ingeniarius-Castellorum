@@ -8,13 +8,17 @@ Token: este MCP espera sempre um COOLIFY_API_TOKEN com TTL de 7 dias (scopes rea
 
 Regras invioláveis, não configuráveis:
 - R1 — este MCP nunca apaga nada. Não existe tool de exclusão e o cliente HTTP recusa DELETE. Para apagar um recurso, o humano usa a UI do Coolify.
-- R2 — mutações de configuração (update_application_config, upsert_env, update_domains) são bloqueadas quando o recurso está no ar. Passar confirm=true edita em quente: a alteração fica gravada e aplica-se no próximo deploy. Sem confirm, a sequência é control(stop) -> alteração -> deploy(uuid).
+- R2 — se um recurso estiver a correr, NÃO é possível alterar nem corrigir a configuração ou os ficheiros dele. Não existe confirm nem qualquer outra forma de contornar. Quando isto acontecer: dizer ao humano que o recurso está no ar, que a alteração não pode ser feita agora, e PEDIR-LHE que faça o stop. Não fazer o stop por iniciativa própria — control(stop) derruba o serviço e essa decisão é do humano. Depois de ele confirmar que está parado: alteração -> deploy(uuid).
 - R3 — nenhum acesso a ficheiros do host, /data/coolify, chaves SSH ou .env.
 - R4 — nunca cria/roda tokens de API, não mexe em equipas, servidores, chaves privadas nem em definições da API.
 
 Ciclo de vida (control, deploy, cancel_deployment) não é afetado por R2: reiniciar ou fazer deploy de um recurso ativo é o comportamento esperado.
 
 Criação (create_application, create_database, create_service) nasce parada. O deploy é sempre um passo separado e explícito.
+
+Deploy não é sincrono. control(start|restart), deploy e repair_resource devolvem quando o Coolify aceita o pedido, não quando o recurso está de pé. Durante o start_period de um healthcheck o Docker reporta o container como saudável independentemente do que a sonda diria, por isso um status lido logo a seguir não prova nada. Enquanto um recurso trouxer status_provisional=true, NUNCA reportar sucesso a partir dele: esperar e voltar a ler até o campo desaparecer.
+
+Alterar um healthcheck é a mudança mais perigosa deste MCP: um healthcheck que falha faz o Traefik retirar o container do balanceador e o site passa a devolver "no available server", mesmo com o processo vivo lá dentro. Validar que o compose é YAML válido NÃO prova que a sonda funciona. Antes de gravar, confirmar o comando dentro do container (docker exec ...) ou avisar o humano de que isso não foi verificado.
 
 Segredos: get_env_values e get_database_credentials devolvem valores mascarados por omissão. Só passar mask=false quando o valor real for mesmo necessário; a leitura em claro fica registada no audit log. Nunca imprimir segredos em resumos nem repeti-los sem necessidade.
 

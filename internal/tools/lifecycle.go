@@ -29,7 +29,11 @@ func (r *Runtime) control(ctx context.Context, _ *mcp.CallToolRequest, in contro
 	if err != nil {
 		return fail(err)
 	}
-	return ok(map[string]any{"uuid": in.UUID, "action": in.Action, "result": raw})
+	out := map[string]any{"uuid": in.UUID, "action": in.Action, "result": raw}
+	if in.Action != coolify.ActionStop {
+		out["next"] = coolify.PostDeployWarning
+	}
+	return ok(out)
 }
 
 func (r *Runtime) deploy(ctx context.Context, _ *mcp.CallToolRequest, in deployInput) (*mcp.CallToolResult, any, error) {
@@ -38,7 +42,12 @@ func (r *Runtime) deploy(ctx context.Context, _ *mcp.CallToolRequest, in deployI
 	if err != nil {
 		return fail(err)
 	}
-	return ok(map[string]any{"uuid": in.UUID, "result": raw})
+	return ok(map[string]any{
+		"uuid":     in.UUID,
+		"result":   raw,
+		"deployed": false,
+		"next":     coolify.PostDeployWarning,
+	})
 }
 
 func (r *Runtime) cancelDeployment(ctx context.Context, _ *mcp.CallToolRequest, in cancelInput) (*mcp.CallToolResult, any, error) {

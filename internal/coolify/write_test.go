@@ -51,54 +51,42 @@ func newMutationFixture(t *testing.T, kind, status string) *mutationFixture {
 
 func (f *mutationFixture) didMutate() bool { return atomic.LoadInt32(&f.mutated) > 0 }
 
-// R2 across the state table, for every configuration mutation.
+// R2 across the state table, for every configuration mutation. A running
+// resource is refused and the refusal must never reach Coolify.
 func TestR2BlocksConfigMutationsOnAir(t *testing.T) {
 	activeStates := []string{"running", "running:healthy", "running:unhealthy", "degraded", "starting", "restarting", "deploying"}
 	inactiveStates := []string{"exited", "stopped", "created", "paused", "not_deployed"}
 
-	mutations := map[string]func(*Client, *guard.OnAirGuard, bool) (*Mutation, error){
-		"update_application_config": func(c *Client, g *guard.OnAirGuard, confirm bool) (*Mutation, error) {
-			return c.UpdateApplicationConfig(context.Background(), g, "r1", map[string]any{"build_command": "make"}, confirm)
+	mutations := map[string]func(*Client, *guard.OnAirGuard) (*Mutation, error){
+		"update_application_config": func(c *Client, g *guard.OnAirGuard) (*Mutation, error) {
+			return c.UpdateApplicationConfig(context.Background(), g, "r1", map[string]any{"build_command": "make"})
 		},
-		"upsert_env": func(c *Client, g *guard.OnAirGuard, confirm bool) (*Mutation, error) {
-			return c.UpsertEnv(context.Background(), g, "r1", []EnvInput{{Key: "K", Value: "V"}}, confirm)
+		"upsert_env": func(c *Client, g *guard.OnAirGuard) (*Mutation, error) {
+			return c.UpsertEnv(context.Background(), g, "r1", []EnvInput{{Key: "K", Value: "V"}})
 		},
-		"update_domains": func(c *Client, g *guard.OnAirGuard, confirm bool) (*Mutation, error) {
-			return c.UpdateDomains(context.Background(), g, "r1", []string{"https://a.example.com"}, confirm)
+		"update_domains": func(c *Client, g *guard.OnAirGuard) (*Mutation, error) {
+			return c.UpdateDomains(context.Background(), g, "r1", []string{"https://a.example.com"})
 		},
 	}
 
 	for name, mutate := range mutations {
 		for _, status := range activeStates {
-			f := newMutationFixture(t, "application", status)
-			g := guard.NewOnAirGuard(true)
-
-			if _, err := mutate(f.client, g, false); !guard.IsCode(err, guard.CodeDeniedOnAir) {
-				t.Errorf("%s on %q: want DENIED_ONAIR, got %v", name, status, err)
-			}
-			if f.didMutate() {
-				t.Errorf("%s on %q: a refused mutation still reached Coolify", name, status)
-			}
-
-			m, err := mutate(f.client, g, true)
-			if err != nil {
-				t.Errorf("%s on %q with confirm: want allow, got %v", name, status, err)
-				continue
-			}
-			if !m.HotEdited || m.Note == "" {
-				t.Errorf("%s on %q with confirm: the result must flag the hot edit, got %+v", name, status, m)
+			for _, strict := range []bool{true, false} {
+				f := newMutationFixture(t, "application", status)
+				if _, err := mutate(f.client, guard.NewOnAirGuard(strict)); !guard.IsCode(err, guard.CodeDeniedOnAir) {
+					t.Errorf("%s on %q strict=%v: want DENIED_ONAIR, got %v", name, status, strict, err)
+				}
+				if f.didMutate() {
+					t.Errorf("%s on %q: a refused mutation still reached Coolify", name, status)
+				}
 			}
 		}
 
 		for _, status := range inactiveStates {
 			f := newMutationFixture(t, "application", status)
-			m, err := mutate(f.client, guard.NewOnAirGuard(true), false)
-			if err != nil {
+			if _, err := mutate(f.client, guard.NewOnAirGuard(true)); err != nil {
 				t.Errorf("%s on %q: want allow, got %v", name, status, err)
 				continue
-			}
-			if m.HotEdited {
-				t.Errorf("%s on %q: a stopped resource is not a hot edit", name, status)
 			}
 			if !f.didMutate() {
 				t.Errorf("%s on %q: the mutation never reached Coolify", name, status)
@@ -109,13 +97,13 @@ func TestR2BlocksConfigMutationsOnAir(t *testing.T) {
 
 func TestR2UnknownStatusFailsClosed(t *testing.T) {
 	f := newMutationFixture(t, "application", "who-knows")
-	if _, err := f.client.UpsertEnv(context.Background(), guard.NewOnAirGuard(true), "r1", []EnvInput{{Key: "K", Value: "V"}}, false); !guard.IsCode(err, guard.CodeDeniedOnAir) {
+	if _, err := f.client.UpsertEnv(context.Background(), guard.NewOnAirGuard(true), "r1", []EnvInput{{Key: "K", Value: "V"}}); !guard.IsCode(err, guard.CodeDeniedOnAir) {
 		t.Fatalf("strict: want DENIED_ONAIR, got %v", err)
 	}
 	if f.didMutate() {
 		t.Fatal("strict mode still wrote")
 	}
-	if _, err := f.client.UpsertEnv(context.Background(), guard.NewOnAirGuard(false), "r1", []EnvInput{{Key: "K", Value: "V"}}, false); err != nil {
+	if _, err := f.client.UpsertEnv(context.Background(), guard.NewOnAirGuard(false), "r1", []EnvInput{{Key: "K", Value: "V"}}); err != nil {
 		t.Fatalf("non-strict: want allow, got %v", err)
 	}
 }
@@ -171,7 +159,7 @@ func TestCreationIsAlwaysStopped(t *testing.T) {
 func TestUpdateConfigStripsInstantDeploy(t *testing.T) {
 	f := newMutationFixture(t, "application", "exited")
 	_, err := f.client.UpdateApplicationConfig(context.Background(), guard.NewOnAirGuard(true), "r1",
-		map[string]any{"build_command": "make", "instant_deploy": true}, false)
+		map[string]any{"build_command": "make", "instant_deploy": true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +171,7 @@ func TestUpdateConfigStripsInstantDeploy(t *testing.T) {
 func TestUpdateApplicationConfigRejectsNonApplications(t *testing.T) {
 	f := newMutationFixture(t, "database", "exited")
 	_, err := f.client.UpdateApplicationConfig(context.Background(), guard.NewOnAirGuard(true), "r1",
-		map[string]any{"build_command": "make"}, false)
+		map[string]any{"build_command": "make"})
 	if !guard.IsCode(err, guard.CodeBadInput) {
 		t.Fatalf("want BAD_INPUT, got %v", err)
 	}
@@ -191,12 +179,12 @@ func TestUpdateApplicationConfigRejectsNonApplications(t *testing.T) {
 
 func TestUpdateDomainsRejectsDatabasesAndEmptyLists(t *testing.T) {
 	f := newMutationFixture(t, "database", "exited")
-	if _, err := f.client.UpdateDomains(context.Background(), guard.NewOnAirGuard(true), "r1", []string{"a.example.com"}, false); !guard.IsCode(err, guard.CodeBadInput) {
+	if _, err := f.client.UpdateDomains(context.Background(), guard.NewOnAirGuard(true), "r1", []string{"a.example.com"}); !guard.IsCode(err, guard.CodeBadInput) {
 		t.Fatalf("database: want BAD_INPUT, got %v", err)
 	}
 	app := newMutationFixture(t, "application", "exited")
 	for _, domains := range [][]string{nil, {}, {"", "  "}} {
-		if _, err := app.client.UpdateDomains(context.Background(), guard.NewOnAirGuard(true), "r1", domains, false); !guard.IsCode(err, guard.CodeBadInput) {
+		if _, err := app.client.UpdateDomains(context.Background(), guard.NewOnAirGuard(true), "r1", domains); !guard.IsCode(err, guard.CodeBadInput) {
 			t.Errorf("domains=%v: want BAD_INPUT (this tool cannot clear the list), got %v", domains, err)
 		}
 	}
@@ -220,7 +208,7 @@ func TestUpsertEnvSendsABulkPatch(t *testing.T) {
 	_, err := f.client.UpsertEnv(context.Background(), guard.NewOnAirGuard(true), "r1", []EnvInput{
 		{Key: "A", Value: "1"},
 		{Key: "B", Value: "2", IsBuildTime: true},
-	}, false)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +221,7 @@ func TestUpsertEnvSendsABulkPatch(t *testing.T) {
 	if len(body.Data) != 2 || body.Data[0]["key"] != "A" || body.Data[1]["is_build_time"] != true {
 		t.Errorf("bulk payload = %s", f.lastBody)
 	}
-	if _, err := f.client.UpsertEnv(context.Background(), guard.NewOnAirGuard(true), "r1", []EnvInput{{Key: " ", Value: "x"}}, false); !guard.IsCode(err, guard.CodeBadInput) {
+	if _, err := f.client.UpsertEnv(context.Background(), guard.NewOnAirGuard(true), "r1", []EnvInput{{Key: " ", Value: "x"}}); !guard.IsCode(err, guard.CodeBadInput) {
 		t.Errorf("empty key: want BAD_INPUT, got %v", err)
 	}
 }
@@ -273,7 +261,7 @@ func TestUpdateApplicationConfigPatchesStoppedServiceCompose(t *testing.T) {
 			{"name": "glances", "url": ""},
 			{"name": "glances-proxy", "url": "https://beholder.example.com"},
 		},
-	}, false)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

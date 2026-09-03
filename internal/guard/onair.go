@@ -71,25 +71,30 @@ func NewOnAirGuard(strict bool) *OnAirGuard {
 	return &OnAirGuard{Strict: strict}
 }
 
-const onAirRemedy = "either pass confirm=true to edit in place (the resource keeps running and the change applies on the next deploy), or run control(stop) -> the update -> deploy(uuid)"
+const onAirRemedy = "ask the human to stop the resource in Coolify, or to authorise control(stop) explicitly. Do NOT stop it yourself. Once it is stopped: the update, then deploy(uuid)."
 
-// AssertMutable gates a configuration mutation. An active resource is refused
-// unless the caller passes confirm=true, which is the deliberate hot-edit
-// escape hatch. Lifecycle operations (control, deploy, cancel_deployment) must
-// not call this — restarting a running resource is the expected behaviour.
-func (g *OnAirGuard) AssertMutable(uuid, status string, confirmed bool) error {
+// AssertMutable gates a configuration mutation. A resource that is on air is
+// refused, full stop — there is no confirm flag and no escape hatch.
+//
+// This used to allow an in-place edit with confirm=true. That is exactly how a
+// failing healthcheck reached a live service: the edit was accepted while the
+// resource was serving traffic, and the damage only surfaced later, when
+// Traefik dropped the container from its load balancer. Editing the definition
+// of something that is currently running is not a decision this server makes
+// on an agent's say-so.
+//
+// Lifecycle operations (control, deploy, cancel_deployment) must not call this:
+// restarting or deploying a running resource is the expected behaviour.
+func (g *OnAirGuard) AssertMutable(uuid, status string) error {
 	switch Classify(status) {
 	case StateInactive:
 		return nil
 	case StateActive:
-		if confirmed {
-			return nil
-		}
 		return NewErrorWithRemedy(CodeDeniedOnAir,
-			"resource "+uuid+" is on air (status "+status+"); configuration mutations are blocked by default",
+			"resource "+uuid+" is running (status "+status+"); its configuration and files cannot be changed or repaired while it is up",
 			onAirRemedy)
 	default:
-		if !g.Strict || confirmed {
+		if !g.Strict {
 			return nil
 		}
 		return NewErrorWithRemedy(CodeDeniedOnAir,
@@ -98,15 +103,15 @@ func (g *OnAirGuard) AssertMutable(uuid, status string, confirmed bool) error {
 	}
 }
 
-// AssertStopped is R2 without the confirm escape hatch: the resource must be
+// AssertStopped is R2 at its strictest: the resource must be
 // provably inactive. Used by repair_resource, which recreates the container.
 func (g *OnAirGuard) AssertStopped(uuid, status string) error {
 	if Classify(status) == StateInactive {
 		return nil
 	}
 	return NewErrorWithRemedy(CodeDeniedOnAir,
-		"resource "+uuid+" is not stopped (status "+quote(status)+") and this operation recreates its container; confirm=true does not override it",
-		"run control(stop) on "+uuid+" first, then repair_resource, then deploy(uuid)")
+		"resource "+uuid+" is not stopped (status "+quote(status)+"); it cannot be repaired while it is up, because this recreates its container",
+		onAirRemedy)
 }
 
 func quote(s string) string {

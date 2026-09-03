@@ -48,6 +48,78 @@ type Resource struct {
 	ProjectUUID string `json:"project_uuid,omitempty"`
 	Environment string `json:"environment,omitempty"`
 	ServerUUID  string `json:"server_uuid,omitempty"`
+
+	// StatusProvisional marks a status read too soon after a deploy or start
+	// to be trusted. See deployTracker.
+	StatusProvisional bool   `json:"status_provisional,omitempty"`
+	StatusNote        string `json:"status_note,omitempty"`
+}
+
+// settleWindow is how long after a deploy or start a status stays provisional.
+// A container healthcheck reports "starting" for its whole start_period, and
+// Docker only flips it to unhealthy after start_period plus retries×interval —
+// so a resource read inside this window can report healthy and still be broken.
+const settleWindow = 3 * time.Minute
+
+// deployTracker remembers when this process last deployed or started each
+// resource, so status reads inside the settle window can be flagged. In memory
+// only (A6); a restart of this server simply forgets, which fails open on
+// annotation but never on the underlying data.
+type deployTracker struct {
+	mu sync.Mutex
+	at map[string]time.Time
+}
+
+func newDeployTracker() *deployTracker {
+	return &deployTracker{at: map[string]time.Time{}}
+}
+
+func (t *deployTracker) mark(uuid string) {
+	if t == nil || uuid == "" {
+		return
+	}
+	t.mu.Lock()
+	t.at[uuid] = time.Now()
+	t.mu.Unlock()
+}
+
+// since reports how long ago the resource was deployed, and whether that was
+// recent enough for its status to still be settling.
+func (t *deployTracker) since(uuid string) (time.Duration, bool) {
+	if t == nil {
+		return 0, false
+	}
+	t.mu.Lock()
+	at, ok := t.at[uuid]
+	t.mu.Unlock()
+	if !ok {
+		return 0, false
+	}
+	elapsed := time.Since(at)
+	return elapsed, elapsed < settleWindow
+}
+
+// annotate flags a status this process cannot yet vouch for. The note is
+// deliberately blunt: reading "running:healthy" seconds after a deploy and
+// calling the job done is the exact mistake it exists to prevent.
+func (c *Client) annotate(res Resource) Resource {
+	elapsed, settling := c.deploys.since(res.UUID)
+	if !settling {
+		return res
+	}
+	res.StatusProvisional = true
+	res.StatusNote = "deployed or started " + elapsed.Truncate(time.Second).String() +
+		" ago; container healthchecks may still be inside their start_period, during which Docker reports them as healthy regardless. Do NOT report success from this read: wait until " +
+		settleWindow.String() + " has passed since the deploy and confirm the status again."
+	return res
+}
+
+func (c *Client) annotateAll(items []Resource) []Resource {
+	out := make([]Resource, len(items))
+	for i, item := range items {
+		out[i] = c.annotate(item)
+	}
+	return out
 }
 
 // rawResource is the loose shape of a /resources row. Coolify's OpenAPI does
@@ -83,7 +155,7 @@ func (c *Client) Inventory(ctx context.Context, refresh bool) ([]Resource, error
 	if !refresh && c.cache.items != nil && time.Since(c.cache.fetchedAt) < c.cache.ttl {
 		items := c.cache.items
 		c.cache.mu.Unlock()
-		return items, nil
+		return c.annotateAll(items), nil
 	}
 	c.cache.mu.Unlock()
 
@@ -121,7 +193,7 @@ func (c *Client) Inventory(ctx context.Context, refresh bool) ([]Resource, error
 	c.cache.items = items
 	c.cache.fetchedAt = time.Now()
 	c.cache.mu.Unlock()
-	return items, nil
+	return c.annotateAll(items), nil
 }
 
 // kindFromType maps Coolify's type strings onto a Kind. Applications and
@@ -184,7 +256,7 @@ func (c *Client) Resolve(ctx context.Context, uuid string) (Resource, error) {
 		if err != nil {
 			return Resource{}, err
 		}
-		return resourceFromDetail(uuid, kind, raw), nil
+		return c.annotate(resourceFromDetail(uuid, kind, raw)), nil
 	}
 	return Resource{}, guard.NewErrorWithRemedy(guard.CodeNotFound,
 		"no application, database or service found with uuid "+uuid,
@@ -228,7 +300,7 @@ func (c *Client) Detail(ctx context.Context, uuid string) (Resource, json.RawMes
 		res.Status = fresh.Status
 		res.State = fresh.State
 	}
-	return res, raw, nil
+	return c.annotate(res), raw, nil
 }
 
 // SearchOptions filters the inventory.
@@ -368,15 +440,105 @@ func (c *Client) GetEnvironment(ctx context.Context, projectUUID, environment st
 	return c.GetRaw(ctx, "/projects/"+projectUUID+"/"+url.PathEscape(environment), nil)
 }
 
+// ContainerLogs is one container's log tail. A service is several containers,
+// so its logs come back as a list of these rather than a single blob.
+type ContainerLogs struct {
+	Name string          `json:"name"`
+	UUID string          `json:"uuid"`
+	Kind string          `json:"kind"`
+	Logs json.RawMessage `json:"logs,omitempty"`
+	Err  string          `json:"error,omitempty"`
+}
+
+// serviceMembers is the sub-application and sub-database list of a service.
+type serviceMembers struct {
+	Applications []struct {
+		UUID string `json:"uuid"`
+		Name string `json:"name"`
+	} `json:"applications"`
+	Databases []struct {
+		UUID string `json:"uuid"`
+		Name string `json:"name"`
+	} `json:"databases"`
+}
+
 // Logs fetches the log tail for a resource, resolving its kind first.
-func (c *Client) Logs(ctx context.Context, uuid string, lines int) (json.RawMessage, error) {
+//
+// Applications and managed databases have a single log endpoint. A service does
+// not: Coolify returns 404 for /services/{uuid}/logs and serves logs per
+// container instead, so this fans out over the service's members. Pass
+// container to narrow it to one, by name or by uuid.
+func (c *Client) Logs(ctx context.Context, uuid string, lines int, container string) ([]ContainerLogs, error) {
 	res, err := c.Resolve(ctx, uuid)
 	if err != nil {
 		return nil, err
 	}
 	q := url.Values{}
 	q.Set("lines", strconv.Itoa(lines))
-	return c.GetRaw(ctx, res.Kind.segment()+"/"+uuid+"/logs", q)
+
+	if res.Kind != KindService {
+		if container != "" {
+			return nil, guard.NewError(guard.CodeBadInput,
+				"container only applies to services; "+uuid+" is a "+string(res.Kind))
+		}
+		raw, err := c.GetRaw(ctx, res.Kind.segment()+"/"+uuid+"/logs", q)
+		if err != nil {
+			return nil, err
+		}
+		return []ContainerLogs{{Name: res.Name, UUID: uuid, Kind: string(res.Kind), Logs: raw}}, nil
+	}
+
+	var members serviceMembers
+	if err := c.Get(ctx, "/services/"+uuid, nil, &members); err != nil {
+		return nil, err
+	}
+
+	type target struct{ uuid, name, segment, kind string }
+	targets := make([]target, 0, len(members.Applications)+len(members.Databases))
+	for _, a := range members.Applications {
+		targets = append(targets, target{a.UUID, a.Name, "applications", "application"})
+	}
+	for _, d := range members.Databases {
+		targets = append(targets, target{d.UUID, d.Name, "databases", "database"})
+	}
+	if len(targets) == 0 {
+		return nil, guard.NewError(guard.CodeNotFound,
+			"service "+uuid+" reports no containers to read logs from")
+	}
+
+	if container = strings.TrimSpace(container); container != "" {
+		matched := targets[:0:0]
+		for _, t := range targets {
+			if strings.EqualFold(t.name, container) || t.uuid == container {
+				matched = append(matched, t)
+			}
+		}
+		if len(matched) == 0 {
+			names := make([]string, 0, len(targets))
+			for _, t := range targets {
+				names = append(names, t.name)
+			}
+			return nil, guard.NewErrorWithRemedy(guard.CodeNotFound,
+				"service "+uuid+" has no container named "+container,
+				"containers in this service: "+strings.Join(names, ", "))
+		}
+		targets = matched
+	}
+
+	out := make([]ContainerLogs, 0, len(targets))
+	for _, t := range targets {
+		entry := ContainerLogs{Name: t.name, UUID: t.uuid, Kind: t.kind}
+		// One unreadable container must not hide the others' logs, which are
+		// often exactly where the failure shows up.
+		raw, err := c.GetRaw(ctx, "/services/"+uuid+"/"+t.segment+"/"+t.uuid+"/logs", q)
+		if err != nil {
+			entry.Err = err.Error()
+		} else {
+			entry.Logs = raw
+		}
+		out = append(out, entry)
+	}
+	return out, nil
 }
 
 // Storages lists persistent and file storages of a resource.
