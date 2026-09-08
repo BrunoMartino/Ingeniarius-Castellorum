@@ -9,18 +9,18 @@ import (
 )
 
 type controlInput struct {
-	UUID   string `json:"uuid" jsonschema:"uuid of the application, database or service"`
+	UUID   string `json:"uuid" jsonschema:"resource uuid"`
 	Action string `json:"action" jsonschema:"start, stop or restart"`
 }
 
 type deployInput struct {
-	UUID      string `json:"uuid" jsonschema:"uuid of the application or service to deploy"`
-	Force     bool   `json:"force,omitempty" jsonschema:"rebuild without the build cache"`
-	DockerTag string `json:"docker_tag,omitempty" jsonschema:"image tag to deploy, for docker-image applications only"`
+	UUID      string `json:"uuid" jsonschema:"app or service uuid"`
+	Force     bool   `json:"force,omitempty" jsonschema:"rebuild without cache"`
+	DockerTag string `json:"docker_tag,omitempty" jsonschema:"image tag (docker-image apps only)"`
 }
 
 type cancelInput struct {
-	DeploymentUUID string `json:"deployment_uuid" jsonschema:"uuid of the running deployment, from list_deployments"`
+	DeploymentUUID string `json:"deployment_uuid" jsonschema:"deployment uuid from list_deployments"`
 }
 
 func (r *Runtime) control(ctx context.Context, _ *mcp.CallToolRequest, in controlInput) (*mcp.CallToolResult, any, error) {

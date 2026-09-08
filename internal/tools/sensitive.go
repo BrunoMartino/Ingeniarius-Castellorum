@@ -9,8 +9,8 @@ import (
 // secretInput carries an explicit Mask pointer so an omitted field and an
 // explicit false are distinguishable: omitted means masked.
 type secretInput struct {
-	UUID string `json:"uuid" jsonschema:"uuid of the resource"`
-	Mask *bool  `json:"mask,omitempty" jsonschema:"default true; pass false only when the real value is genuinely needed, which is recorded in the audit log"`
+	UUID string `json:"uuid" jsonschema:"resource uuid"`
+	Mask *bool  `json:"mask,omitempty" jsonschema:"default true; false unmasks (audited)"`
 }
 
 // masked resolves the default. Omitting mask means masked.

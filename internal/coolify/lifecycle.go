@@ -87,15 +87,28 @@ func (c *Client) CancelDeployment(ctx context.Context, deploymentUUID string) (j
 }
 
 // ListDeployments returns running deployments, one deployment by uuid, or the
-// deployment history of one application.
+// deployment history of one application. Build logs are stripped from lists and
+// truncated in detail responses to save tokens.
 func (c *Client) ListDeployments(ctx context.Context, deploymentUUID, applicationUUID string) (json.RawMessage, error) {
 	switch {
 	case strings.TrimSpace(deploymentUUID) != "":
-		return c.GetRaw(ctx, "/deployments/"+deploymentUUID, nil)
+		raw, err := c.GetRaw(ctx, "/deployments/"+deploymentUUID, nil)
+		if err != nil {
+			return nil, err
+		}
+		return TrimDeploymentLogs(raw, true), nil
 	case strings.TrimSpace(applicationUUID) != "":
-		return c.GetRaw(ctx, "/deployments/applications/"+applicationUUID, nil)
+		raw, err := c.GetRaw(ctx, "/deployments/applications/"+applicationUUID, nil)
+		if err != nil {
+			return nil, err
+		}
+		return TrimDeploymentLogs(raw, false), nil
 	default:
-		return c.GetRaw(ctx, "/deployments", nil)
+		raw, err := c.GetRaw(ctx, "/deployments", nil)
+		if err != nil {
+			return nil, err
+		}
+		return TrimDeploymentLogs(raw, false), nil
 	}
 }
 
@@ -119,4 +132,4 @@ func quoteEmpty(s string) string {
 // It exists because a deployment that returns 200 has only been *accepted*:
 // the containers are still coming up, and a status read during a healthcheck's
 // start_period reports healthy no matter what the healthcheck would say.
-const PostDeployWarning = "Coolify accepted the request; the containers are not up yet. Do NOT report success from a status read taken now. Wait out the healthcheck start_period, then re-read the status and treat it as real only once status_provisional is absent. If you changed a healthcheck, verify the probe command actually works inside the container before trusting a healthy status."
+const PostDeployWarning = "Coolify accepted the request; containers are still starting. Do NOT report success until status_provisional is absent. After healthcheck changes, verify the probe inside the container."

@@ -170,7 +170,14 @@ func (c *Client) UpdateApplicationConfig(ctx context.Context, onAir *guard.OnAir
 		var out json.RawMessage
 		switch res.Kind {
 		case KindApplication:
-			err := c.Patch(ctx, "/applications/"+uuid, fields, &out)
+			body, err := applicationPatchBody(fields)
+			if err != nil {
+				return nil, err
+			}
+			err = c.Patch(ctx, "/applications/"+uuid, body, &out)
+			return out, err
+		case KindDatabase:
+			err := c.Patch(ctx, "/databases/"+uuid, fields, &out)
 			return out, err
 		case KindService:
 			body, err := servicePatchBody(fields)
@@ -181,10 +188,24 @@ func (c *Client) UpdateApplicationConfig(ctx context.Context, onAir *guard.OnAir
 			return out, err
 		default:
 			return nil, guard.NewErrorWithRemedy(guard.CodeBadInput,
-				"update_application_config does not apply to databases; "+uuid+" is a "+string(res.Kind),
-				"use upsert_env for database settings, or change them in the Coolify UI")
+				"update_application_config does not apply to "+string(res.Kind),
+				"use search_resources to confirm the uuid kind")
 		}
 	})
+}
+
+func applicationPatchBody(fields map[string]any) (map[string]any, error) {
+	body := map[string]any{}
+	for k, v := range fields {
+		body[k] = v
+	}
+	if raw, ok := body["docker_compose_raw"].(string); ok && strings.TrimSpace(raw) != "" {
+		body["docker_compose_raw"] = encodeCompose(raw)
+	}
+	if len(body) == 0 {
+		return nil, guard.NewError(guard.CodeBadInput, "at least one settings field is required")
+	}
+	return body, nil
 }
 
 func servicePatchBody(fields map[string]any) (map[string]any, error) {

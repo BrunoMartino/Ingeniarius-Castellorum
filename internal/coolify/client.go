@@ -229,20 +229,20 @@ func interestingHeaders(h http.Header) string {
 
 // tokenTTLRemedy is appended to every Coolify refusal: this MCP only accepts
 // API tokens issued with a 7-day expiry.
-const tokenTTLRemedy = "This MCP expects Coolify API tokens with a 7-day TTL. Ask the human to renew the token: Coolify → Security → API Tokens, create a new one expiring in 7 days (scopes read, read:sensitive, write, deploy; never root), set COOLIFY_API_TOKEN, and reload the MCP."
+const tokenTTLRemedy = "Renew COOLIFY_API_TOKEN (7-day TTL, scopes read/read:sensitive/write/deploy) in Coolify → Security → API Tokens, then reload the MCP."
 
 func diagnoseCoolify(status int, body string) string {
 	lower := strings.ToLower(body)
 	var specific string
 	switch {
 	case strings.Contains(lower, "you are not allowed to access the api"):
-		specific = "Coolify rejected this client IP (ApiAllowed middleware), not the token and not COOLIFY_USER. $request->ip() on the Coolify host is compared to Settings → Advanced → Allowed IPs; behind Cloudflare/proxy that IP is often the proxy, not this machine's public address. Add that IP, or 0.0.0.0 to allow all, then Save."
+		specific = "Coolify rejected this client IP (Settings → Advanced → Allowed IPs). Add the IP Coolify sees, or 0.0.0.0."
 	case strings.Contains(lower, "api is disabled"):
-		specific = "Enable API Access in Coolify Settings → Advanced and Save."
+		specific = "Enable API Access in Coolify Settings → Advanced."
 	case status == http.StatusUnauthorized:
-		specific = "Coolify rejected the bearer token. Check COOLIFY_API_TOKEN. COOLIFY_USER is audit-only and is not sent."
+		specific = "Coolify rejected the bearer token. Check COOLIFY_API_TOKEN."
 	default:
-		specific = "Coolify refused the request. Confirm COOLIFY_URL points at the instance root (no /mcp), API Access is on, Allowed IPs includes the IP Coolify sees, and COOLIFY_API_TOKEN is valid. COOLIFY_USER is not sent."
+		specific = "Check COOLIFY_URL, API Access, Allowed IPs, and COOLIFY_API_TOKEN."
 	}
 	return specific + " " + tokenTTLRemedy
 }

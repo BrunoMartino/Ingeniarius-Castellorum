@@ -108,7 +108,6 @@ func TestForbiddenErrorExplainsAllowlist(t *testing.T) {
 		"/api/v1/resources",
 		"token_len=10",
 		"Allowed IPs",
-		"COOLIFY_USER",
 		"7-day TTL",
 	} {
 		if !strings.Contains(msg, needle) {

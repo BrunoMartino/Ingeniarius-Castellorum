@@ -108,9 +108,9 @@ func (c *Client) annotate(res Resource) Resource {
 		return res
 	}
 	res.StatusProvisional = true
-	res.StatusNote = "deployed or started " + elapsed.Truncate(time.Second).String() +
-		" ago; container healthchecks may still be inside their start_period, during which Docker reports them as healthy regardless. Do NOT report success from this read: wait until " +
-		settleWindow.String() + " has passed since the deploy and confirm the status again."
+	res.StatusNote = "status provisional: deployed/started " + elapsed.Truncate(time.Second).String() +
+		" ago; healthchecks may still be in start_period. Do NOT report success — re-read after " +
+		settleWindow.String() + "."
 	return res
 }
 

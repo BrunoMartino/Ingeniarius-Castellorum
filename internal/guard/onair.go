@@ -71,7 +71,7 @@ func NewOnAirGuard(strict bool) *OnAirGuard {
 	return &OnAirGuard{Strict: strict}
 }
 
-const onAirRemedy = "ask the human to stop the resource in Coolify, or to authorise control(stop) explicitly. Do NOT stop it yourself. Once it is stopped: the update, then deploy(uuid)."
+const onAirRemedy = "ask the human to stop the resource; Do NOT stop it yourself. Once stopped: update, then deploy(uuid)."
 
 // AssertMutable gates a configuration mutation. A resource that is on air is
 // refused, full stop — there is no confirm flag and no escape hatch.

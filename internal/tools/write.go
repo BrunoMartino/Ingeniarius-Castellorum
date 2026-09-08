@@ -16,12 +16,12 @@ type createProjectInput struct {
 
 type createApplicationInput struct {
 	Source          string         `json:"source" jsonschema:"public_repo, private_repo_github, dockerfile, docker_compose or docker_image"`
-	ProjectUUID     string         `json:"project_uuid" jsonschema:"target project uuid"`
-	ServerUUID      string         `json:"server_uuid" jsonschema:"target server uuid"`
-	EnvironmentName string         `json:"environment_name" jsonschema:"target environment name, usually production"`
-	EnvironmentUUID string         `json:"environment_uuid,omitempty" jsonschema:"target environment uuid; Coolify requires it alongside environment_name"`
+	ProjectUUID     string         `json:"project_uuid"`
+	ServerUUID      string         `json:"server_uuid"`
+	EnvironmentName string         `json:"environment_name"`
+	EnvironmentUUID string         `json:"environment_uuid,omitempty"`
 	Name            string         `json:"name,omitempty"`
-	Fields          map[string]any `json:"fields,omitempty" jsonschema:"source-specific fields, passed to Coolify verbatim: git_repository, git_branch, build_pack, dockerfile, docker_registry_image_name, ports_exposes, domains and so on"`
+	Fields          map[string]any `json:"fields,omitempty" jsonschema:"source-specific fields passed verbatim to Coolify"`
 }
 
 type createDatabaseInput struct {
@@ -31,32 +31,32 @@ type createDatabaseInput struct {
 	EnvironmentName string         `json:"environment_name"`
 	EnvironmentUUID string         `json:"environment_uuid,omitempty"`
 	Name            string         `json:"name,omitempty"`
-	Fields          map[string]any `json:"fields,omitempty" jsonschema:"engine-specific fields passed verbatim, such as postgres_user, postgres_db or image"`
+	Fields          map[string]any `json:"fields,omitempty" jsonschema:"engine-specific fields passed verbatim"`
 }
 
 type createServiceInput struct {
-	Type            string         `json:"type,omitempty" jsonschema:"one-click service type; required unless docker_compose_raw is given"`
+	Type            string         `json:"type,omitempty" jsonschema:"one-click type; required unless docker_compose_raw in fields"`
 	ProjectUUID     string         `json:"project_uuid"`
 	ServerUUID      string         `json:"server_uuid"`
 	EnvironmentName string         `json:"environment_name"`
 	EnvironmentUUID string         `json:"environment_uuid,omitempty"`
 	Name            string         `json:"name,omitempty"`
-	Fields          map[string]any `json:"fields,omitempty" jsonschema:"extra fields passed verbatim, such as docker_compose_raw or description"`
+	Fields          map[string]any `json:"fields,omitempty" jsonschema:"extra fields, e.g. docker_compose_raw"`
 }
 
 type updateAppConfigInput struct {
-	UUID   string         `json:"uuid" jsonschema:"application uuid"`
-	Fields map[string]any `json:"fields" jsonschema:"settings to patch. Applications: build_pack, build_command, ports_exposes, health_check_*, git_branch. Services: docker_compose_raw (YAML), urls ([{name,url}] per compose service)."`
+	UUID   string         `json:"uuid" jsonschema:"app, service or database uuid"`
+	Fields map[string]any `json:"fields" jsonschema:"settings to patch. Apps: build_*, ports_*, health_check_*, git_branch, docker_compose_raw. Services: docker_compose_raw, urls. Databases: image, limits_*, public_port, engine configs."`
 }
 
 type upsertEnvInput struct {
-	UUID      string             `json:"uuid" jsonschema:"uuid of the application, database or service"`
-	Variables []coolify.EnvInput `json:"variables" jsonschema:"variables to create or update; existing keys are overwritten and nothing is ever removed"`
+	UUID      string             `json:"uuid"`
+	Variables []coolify.EnvInput `json:"variables" jsonschema:"vars to create/update; existing keys overwritten, none removed"`
 }
 
 type updateDomainsInput struct {
-	UUID    string   `json:"uuid" jsonschema:"application or service uuid"`
-	Domains []string `json:"domains" jsonschema:"the full FQDN list for the resource; this replaces the current list"`
+	UUID    string   `json:"uuid" jsonschema:"app or service uuid"`
+	Domains []string `json:"domains" jsonschema:"full FQDN list; replaces current"`
 }
 
 // placement copies the four fields every creation endpoint requires into the
@@ -136,7 +136,7 @@ func (r *Runtime) createService(ctx context.Context, _ *mcp.CallToolRequest, in 
 	return ok(map[string]any{"service": raw, "note": createdStoppedNote})
 }
 
-const createdStoppedNote = "the resource was created stopped; call deploy(uuid) when you are ready to bring it up"
+const createdStoppedNote = "created stopped; call deploy(uuid) to start"
 
 func (r *Runtime) updateApplicationConfig(ctx context.Context, _ *mcp.CallToolRequest, in updateAppConfigInput) (*mcp.CallToolResult, any, error) {
 	m, err := r.client.UpdateApplicationConfig(ctx, r.onAir, in.UUID, in.Fields)

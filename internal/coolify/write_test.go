@@ -168,12 +168,46 @@ func TestUpdateConfigStripsInstantDeploy(t *testing.T) {
 	}
 }
 
-func TestUpdateApplicationConfigRejectsNonApplications(t *testing.T) {
+func TestUpdateApplicationConfigAllowsStoppedDatabase(t *testing.T) {
 	f := newMutationFixture(t, "database", "exited")
 	_, err := f.client.UpdateApplicationConfig(context.Background(), guard.NewOnAirGuard(true), "r1",
-		map[string]any{"build_command": "make"})
-	if !guard.IsCode(err, guard.CodeBadInput) {
-		t.Fatalf("want BAD_INPUT, got %v", err)
+		map[string]any{"image": "postgres:16", "limits_memory": "512m"})
+	if err != nil {
+		t.Fatalf("stopped database: %v", err)
+	}
+	if !f.didMutate() {
+		t.Fatal("expected PATCH to Coolify")
+	}
+	if !strings.Contains(f.lastBody, `"image"`) {
+		t.Fatalf("body missing image: %s", f.lastBody)
+	}
+}
+
+func TestUpdateApplicationConfigRejectsRunningDatabase(t *testing.T) {
+	f := newMutationFixture(t, "database", "running:healthy")
+	_, err := f.client.UpdateApplicationConfig(context.Background(), guard.NewOnAirGuard(true), "r1",
+		map[string]any{"image": "postgres:16"})
+	if !guard.IsCode(err, guard.CodeDeniedOnAir) {
+		t.Fatalf("running database: want DENIED_ONAIR, got %v", err)
+	}
+	if f.didMutate() {
+		t.Fatal("running database mutation reached Coolify")
+	}
+}
+
+func TestUpdateApplicationConfigPatchesStoppedApplicationCompose(t *testing.T) {
+	f := newMutationFixture(t, "application", "stopped")
+	_, err := f.client.UpdateApplicationConfig(context.Background(), guard.NewOnAirGuard(true), "r1", map[string]any{
+		"docker_compose_raw": "services:\n  web:\n    image: nginx\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.didMutate() {
+		t.Fatal("expected a PATCH to Coolify")
+	}
+	if strings.Contains(f.lastBody, "services:\n") {
+		t.Fatalf("compose was sent as raw YAML, Coolify wants base64: %s", f.lastBody)
 	}
 }
 

@@ -12,40 +12,40 @@ import (
 type emptyInput struct{}
 
 type uuidInput struct {
-	UUID string `json:"uuid" jsonschema:"uuid of the application, database or service"`
+	UUID string `json:"uuid" jsonschema:"resource uuid"`
 }
 
 type searchInput struct {
-	Query       string `json:"query,omitempty" jsonschema:"free text matched against name, uuid, description and fqdn"`
-	Kind        string `json:"kind,omitempty" jsonschema:"restrict to application, database or service"`
+	Query       string `json:"query,omitempty" jsonschema:"match name, uuid, description or fqdn"`
+	Kind        string `json:"kind,omitempty" jsonschema:"application, database or service"`
 	Project     string `json:"project,omitempty" jsonschema:"project uuid"`
 	Environment string `json:"environment,omitempty" jsonschema:"environment name"`
-	Status      string `json:"status,omitempty" jsonschema:"raw status, or the coarse state active, inactive or unknown"`
+	Status      string `json:"status,omitempty" jsonschema:"raw status or active/inactive/unknown"`
 }
 
 type listServersInput struct {
-	UUID string `json:"uuid,omitempty" jsonschema:"server uuid; omit to list every server"`
+	UUID string `json:"uuid,omitempty" jsonschema:"server uuid; omit to list all"`
 }
 
 type listProjectsInput struct {
-	UUID        string `json:"uuid,omitempty" jsonschema:"project uuid; omit to list every project"`
-	Environment string `json:"environment,omitempty" jsonschema:"environment name or uuid; requires uuid, returns that environment's detail"`
+	UUID        string `json:"uuid,omitempty" jsonschema:"project uuid; omit to list all"`
+	Environment string `json:"environment,omitempty" jsonschema:"environment name/uuid; requires uuid"`
 }
 
 type listDeploymentsInput struct {
-	UUID            string `json:"uuid,omitempty" jsonschema:"deployment uuid; returns that deployment's detail"`
-	ApplicationUUID string `json:"application_uuid,omitempty" jsonschema:"application uuid; returns that application's deployment history"`
+	UUID            string `json:"uuid,omitempty" jsonschema:"deployment uuid for detail"`
+	ApplicationUUID string `json:"application_uuid,omitempty" jsonschema:"app uuid for history"`
 }
 
 type logsInput struct {
-	UUID      string `json:"uuid" jsonschema:"uuid of the application, database or service"`
-	Lines     int    `json:"lines,omitempty" jsonschema:"how many trailing lines to return, default 200"`
-	Container string `json:"container,omitempty" jsonschema:"services only: one container by name or uuid; omit to get every container in the service"`
+	UUID      string `json:"uuid" jsonschema:"resource uuid"`
+	Lines     int    `json:"lines,omitempty" jsonschema:"trailing lines, default 200"`
+	Container string `json:"container,omitempty" jsonschema:"services only: container name or uuid"`
 }
 
 type scheduledTasksInput struct {
-	UUID     string `json:"uuid" jsonschema:"uuid of the application or service"`
-	TaskUUID string `json:"task_uuid,omitempty" jsonschema:"scheduled task uuid; when set, returns that task's executions instead of the task list"`
+	UUID     string `json:"uuid" jsonschema:"app or service uuid"`
+	TaskUUID string `json:"task_uuid,omitempty" jsonschema:"task uuid for execution history"`
 }
 
 // Overview is the agent's entry point: what exists, where, and how healthy.
@@ -122,6 +122,12 @@ func (r *Runtime) listServers(ctx context.Context, _ *mcp.CallToolRequest, in li
 		if err != nil {
 			return fail(err)
 		}
+		if detail.Resources != nil {
+			detail.Resources = coolify.PruneJSON(detail.Resources)
+		}
+		if detail.Domains != nil {
+			detail.Domains = coolify.PruneJSON(detail.Domains)
+		}
 		return ok(detail)
 	}
 	servers, err := r.client.ListServers(ctx)
@@ -137,12 +143,15 @@ func (r *Runtime) listProjects(ctx context.Context, _ *mcp.CallToolRequest, in l
 		if err != nil {
 			return fail(err)
 		}
-		return ok(map[string]any{"project_uuid": in.UUID, "environment": env})
+		return ok(map[string]any{"project_uuid": in.UUID, "environment": coolify.PruneJSON(env)})
 	case in.UUID != "":
 		project, err := r.client.GetProject(ctx, in.UUID)
 		r.record(false, "list_projects", in.UUID, err)
 		if err != nil {
 			return fail(err)
+		}
+		if len(project.Environments) > 0 {
+			project.Environments = coolify.PruneJSON(project.Environments)
 		}
 		return ok(project)
 	default:
@@ -158,7 +167,7 @@ func (r *Runtime) getResource(ctx context.Context, _ *mcp.CallToolRequest, in uu
 	if err != nil {
 		return fail(err)
 	}
-	return ok(map[string]any{"summary": res, "detail": raw})
+	return ok(map[string]any{"summary": res, "detail": coolify.PruneJSON(raw)})
 }
 
 func (r *Runtime) listDeployments(ctx context.Context, _ *mcp.CallToolRequest, in listDeploymentsInput) (*mcp.CallToolResult, any, error) {
@@ -203,7 +212,7 @@ func (r *Runtime) listStorages(ctx context.Context, _ *mcp.CallToolRequest, in u
 	if err != nil {
 		return fail(err)
 	}
-	return ok(map[string]any{"uuid": in.UUID, "storages": raw})
+	return ok(map[string]any{"uuid": in.UUID, "storages": coolify.PruneJSON(raw)})
 }
 
 func (r *Runtime) listScheduledTasks(ctx context.Context, _ *mcp.CallToolRequest, in scheduledTasksInput) (*mcp.CallToolResult, any, error) {
