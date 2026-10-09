@@ -10,7 +10,7 @@ vendor/
 *.out
 coverage.out
 coverage.html
-coolify-mcp
+/coolify-mcp
 audit.jsonl
 __debug_bin*
 .idea/
